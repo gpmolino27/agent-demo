@@ -2,7 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { SESSION_COOKIE, verifySessionToken } from "@/lib/auth";
 
 export const config = {
-  matcher: ["/((?!login|api/login|_next/static|_next/image|favicon.ico).*)"],
+  matcher: [
+    "/((?!login|api/login|_next/static|_next/image|favicon.ico|manifest\\.webmanifest|sw\\.js|icons/).*)",
+  ],
 };
 
 export async function middleware(req: NextRequest) {

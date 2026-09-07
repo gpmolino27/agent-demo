@@ -31,6 +31,15 @@ Tem login (usuário único) e histórico de conversas persistido em SQLite.
 Se `LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` não estiverem configuradas, o
 chat funciona normalmente só sem enviar traces.
 
+- **PWA (instalável)** — `public/manifest.webmanifest` + ícones em
+  `public/icons/` + `public/sw.js` (service worker mínimo, cacheia só
+  assets estáticos — páginas e chamadas de API sempre vão pra rede, já que
+  são autenticadas/dinâmicas). `app/register-sw.tsx` registra o service
+  worker no carregamento. `middleware.ts` libera essas três rotas mesmo sem
+  login, senão o navegador não consegue ler o manifest/ícones antes do
+  usuário entrar. Com isso o navegador oferece "Instalar app" / "Adicionar
+  à tela inicial", abrindo em janela própria (`display: standalone`).
+
 ## Rodando localmente
 
 ```bash
@@ -90,8 +99,13 @@ app/
   api/conversations/[id]/route.ts  # mensagens de uma conversa
   api/login/route.ts            # valida credenciais, seta cookie
   api/logout/route.ts           # limpa cookie
+  register-sw.tsx                # registra o service worker
 lib/
   auth.ts                        # cria/verifica o token de sessão (JWT)
   db.ts                          # acesso ao SQLite (conversas/mensagens)
 middleware.ts                    # protege rotas exigindo sessão válida
+public/
+  manifest.webmanifest           # manifest do PWA
+  sw.js                          # service worker (cache de assets estáticos)
+  icons/                         # ícones do app (192/256/384/512, maskable, apple)
 ```
