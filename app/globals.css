@@ -55,32 +55,73 @@ body {
   padding-bottom: 16px;
 }
 
+.message-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 80%;
+}
+
+.message-block.user {
+  align-self: flex-end;
+  align-items: flex-end;
+}
+
+.message-block.assistant,
+.message-block.error {
+  align-self: flex-start;
+  align-items: flex-start;
+}
+
 .message {
   padding: 10px 14px;
   border-radius: 10px;
-  max-width: 80%;
   white-space: pre-wrap;
   line-height: 1.45;
   font-size: 14px;
 }
 
 .message.user {
-  align-self: flex-end;
   background: var(--accent);
   color: white;
 }
 
 .message.assistant {
-  align-self: flex-start;
   background: var(--panel);
   border: 1px solid var(--border);
 }
 
 .message.error {
-  align-self: flex-start;
   background: #3a1620;
   border: 1px solid #6b2233;
   color: #ffb4c0;
+}
+
+.feedback {
+  display: flex;
+  gap: 4px;
+}
+
+.feedback-button {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 2px 7px;
+  font-size: 13px;
+  line-height: 1.5;
+  cursor: pointer;
+  opacity: 0.4;
+}
+
+.feedback-button:hover {
+  opacity: 1;
+  background: var(--panel);
+}
+
+.feedback-button.active {
+  opacity: 1;
+  background: var(--panel);
+  border-color: var(--accent);
 }
 
 .composer {
@@ -369,7 +410,7 @@ body {
     display: none;
   }
 
-  .message {
+  .message-block {
     max-width: 88%;
   }
 

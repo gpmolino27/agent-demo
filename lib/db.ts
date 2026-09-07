@@ -28,6 +28,21 @@ db.exec(`
   );
 `);
 
+// Migração idempotente: bancos criados antes destas colunas continuam válidos.
+function ensureColumn(table: string, column: string, definition: string) {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all() as {
+    name: string;
+  }[];
+  if (!columns.some((c) => c.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+}
+
+// trace_id liga a mensagem ao trace no Langfuse (pra anexar o feedback nele).
+ensureColumn("messages", "trace_id", "TEXT");
+// feedback: 1 = 👍, 0 = 👎, NULL = sem avaliação.
+ensureColumn("messages", "feedback", "INTEGER");
+
 export type Conversation = {
   id: string;
   title: string;
@@ -41,6 +56,8 @@ export type StoredMessage = {
   role: "user" | "assistant";
   content: string;
   createdAt: number;
+  traceId: string | null;
+  feedback: number | null;
 };
 
 export function listConversations(): Conversation[] {
@@ -72,7 +89,8 @@ export function createConversation(title: string): Conversation {
 export function getMessages(conversationId: string): StoredMessage[] {
   return db
     .prepare(
-      `SELECT id, conversation_id as conversationId, role, content, created_at as createdAt
+      `SELECT id, conversation_id as conversationId, role, content,
+              created_at as createdAt, trace_id as traceId, feedback
        FROM messages
        WHERE conversation_id = ?
        ORDER BY id ASC`,
@@ -80,20 +98,41 @@ export function getMessages(conversationId: string): StoredMessage[] {
     .all(conversationId) as StoredMessage[];
 }
 
+/** Retorna o id da mensagem inserida (usado pra anexar feedback depois). */
 export function addMessage(
   conversationId: string,
   role: "user" | "assistant",
   content: string,
-) {
+  traceId?: string | null,
+): number {
   const now = Date.now();
-  db.prepare(
-    `INSERT INTO messages (conversation_id, role, content, created_at)
-     VALUES (?, ?, ?, ?)`,
-  ).run(conversationId, role, content, now);
+  const result = db
+    .prepare(
+      `INSERT INTO messages (conversation_id, role, content, created_at, trace_id)
+       VALUES (?, ?, ?, ?, ?)`,
+    )
+    .run(conversationId, role, content, now, traceId ?? null);
   db.prepare("UPDATE conversations SET updated_at = ? WHERE id = ?").run(
     now,
     conversationId,
   );
+  return Number(result.lastInsertRowid);
+}
+
+export function getMessage(id: number): StoredMessage | undefined {
+  return db
+    .prepare(
+      `SELECT id, conversation_id as conversationId, role, content,
+              created_at as createdAt, trace_id as traceId, feedback
+       FROM messages
+       WHERE id = ?`,
+    )
+    .get(id) as StoredMessage | undefined;
+}
+
+/** value: 1 = 👍, 0 = 👎, null = remove a avaliação. */
+export function setMessageFeedback(id: number, value: number | null) {
+  db.prepare("UPDATE messages SET feedback = ? WHERE id = ?").run(value, id);
 }
 
 const deleteConversationTx = db.transaction((id: string) => {

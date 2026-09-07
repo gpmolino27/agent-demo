@@ -17,8 +17,10 @@ export async function GET(
   }
 
   const messages = getMessages(id).map((m) => ({
+    id: m.id,
     role: m.role,
     content: m.content,
+    feedback: m.feedback,
   }));
 
   return NextResponse.json({ messages });

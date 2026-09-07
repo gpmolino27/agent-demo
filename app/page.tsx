@@ -6,6 +6,10 @@ import { useRouter } from "next/navigation";
 type ChatMessage = {
   role: "user" | "assistant" | "error";
   content: string;
+  /** id da mensagem no banco — só existe em mensagens já persistidas */
+  messageId?: number;
+  /** 1 = 👍, 0 = 👎, null/undefined = sem avaliação */
+  feedback?: number | null;
 };
 
 type ConversationSummary = {
@@ -65,10 +69,19 @@ export default function Home() {
       const data = await res.json();
       setConversationId(id);
       setMessages(
-        data.messages.map((m: { role: string; content: string }) => ({
-          role: m.role as "user" | "assistant",
-          content: m.content,
-        })),
+        data.messages.map(
+          (m: {
+            id: number;
+            role: string;
+            content: string;
+            feedback: number | null;
+          }) => ({
+            role: m.role as "user" | "assistant",
+            content: m.content,
+            messageId: m.id,
+            feedback: m.feedback,
+          }),
+        ),
       );
       setSidebarOpen(false);
     } else if (!opts.keepOnNotFound) {
@@ -108,6 +121,33 @@ export default function Home() {
     router.refresh();
   }
 
+  async function sendFeedback(messageId: number, value: number) {
+    // Clicar de novo no mesmo botão remove a avaliação.
+    const current = messages.find((m) => m.messageId === messageId)?.feedback;
+    const next = current === value ? null : value;
+
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.messageId === messageId ? { ...m, feedback: next } : m,
+      ),
+    );
+
+    const res = await fetch("/api/feedback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messageId, value: next }),
+    });
+
+    if (!res.ok) {
+      // Reverte se o servidor recusou.
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.messageId === messageId ? { ...m, feedback: current } : m,
+        ),
+      );
+    }
+  }
+
   async function sendMessage() {
     const text = input.trim();
     if (!text || loading) return;
@@ -137,7 +177,12 @@ export default function Home() {
 
       setMessages((prev) => [
         ...prev,
-        { role: "assistant", content: data.reply as string },
+        {
+          role: "assistant",
+          content: data.reply as string,
+          messageId: data.messageId as number | undefined,
+          feedback: null,
+        },
       ]);
 
       if (!conversationId && data.conversationId) {
@@ -230,11 +275,36 @@ export default function Home() {
 
         <div className="messages">
           {messages.map((m, i) => (
-            <div key={i} className={`message ${m.role}`}>
-              {m.content}
+            <div key={i} className={`message-block ${m.role}`}>
+              <div className={`message ${m.role}`}>{m.content}</div>
+
+              {m.role === "assistant" && m.messageId !== undefined && (
+                <div className="feedback">
+                  <button
+                    className={`feedback-button ${m.feedback === 1 ? "active" : ""}`}
+                    onClick={() => sendFeedback(m.messageId!, 1)}
+                    aria-label="Resposta útil"
+                    title="Resposta útil"
+                  >
+                    👍
+                  </button>
+                  <button
+                    className={`feedback-button ${m.feedback === 0 ? "active" : ""}`}
+                    onClick={() => sendFeedback(m.messageId!, 0)}
+                    aria-label="Resposta ruim"
+                    title="Resposta ruim"
+                  >
+                    👎
+                  </button>
+                </div>
+              )}
             </div>
           ))}
-          {loading && <div className="message assistant">Pensando…</div>}
+          {loading && (
+            <div className="message-block assistant">
+              <div className="message assistant">Pensando…</div>
+            </div>
+          )}
         </div>
 
         <div className="composer">

@@ -19,14 +19,26 @@ Tem login (usuário único) e histórico de conversas persistido em SQLite.
   histórico de uma delas (`GET /api/conversations/[id]`) ao clicar.
 - **Chat + Langfuse** — `app/api/chat/route.ts` (Node runtime):
   1. cria a conversa no SQLite (se for nova) e salva a mensagem do usuário;
-  2. cria um `trace` no Langfuse com `sessionId = conversationId` — assim
+  2. busca o system prompt no Langfuse (`lib/prompt.ts`);
+  3. cria um `trace` no Langfuse com `sessionId = conversationId` — assim
      todas as trocas de uma mesma conversa aparecem agrupadas como uma
-     *Session* no Langfuse — e uma `generation` dentro dele;
-  3. chama `anthropic.messages.create(...)`;
-  4. salva a resposta do assistente no SQLite e fecha a `generation` com
-     output e uso de tokens;
-  5. dá `flush` no cliente do Langfuse antes de responder (importante em
-     ambientes serverless/short-lived, senão o evento pode não ser enviado).
+     *Session* no Langfuse — e uma `generation` dentro dele, vinculada à
+     versão do prompt;
+  4. chama `anthropic.messages.create(...)`;
+  5. salva a resposta do assistente no SQLite (com o `traceId`) e fecha a
+     `generation` com output e uso de tokens;
+  6. dá `flush` no cliente do Langfuse antes de responder — com teto de
+     tempo (`flushWithTimeout`), porque o SDK leva ~9s pra desistir quando o
+     Langfuse está fora, e observabilidade não pode segurar a resposta.
+- **Prompt versionado** — o system prompt mora no Langfuse
+  (Prompts → `bot-system`, label `production`), buscado com cache de 5 min.
+  Dá pra ajustar a personalidade do bot pela UI **sem novo deploy**. Se o
+  prompt não existir ou o Langfuse estiver fora, o app usa o fallback em
+  `lib/prompt.ts` e continua respondendo.
+- **Feedback do usuário** — 👍/👎 embaixo de cada resposta
+  (`app/api/feedback/route.ts`) vira um score `user-feedback` no Langfuse
+  ligado ao trace daquela resposta, e fica salvo no SQLite pra UI lembrar
+  depois do reload. Clicar de novo no mesmo botão remove a avaliação.
 
 Se `LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` não estiverem configuradas, o
 chat funciona normalmente só sem enviar traces.
@@ -60,6 +72,20 @@ Abra http://localhost:3000 — você será redirecionado para `/login`.
    `.env.local` (`LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY`).
 4. `LANGFUSE_BASEURL` é a URL do seu Langfuse (ex:
    `https://langfuse-web-production-e419.up.railway.app`).
+
+### Criando o prompt no Langfuse
+
+Uma vez só, pra o prompt existir na UI (até lá o app usa o fallback do código):
+
+```bash
+LANGFUSE_PUBLIC_KEY=... LANGFUSE_SECRET_KEY=... LANGFUSE_BASEURL=... \
+  npm run seed:prompt
+```
+
+Ou crie na mão em **Prompts → New prompt**, com nome `bot-system`, tipo
+`text` e label `production`. Depois disso, editar o prompt na UI (criando uma
+nova versão com o label `production`) muda o comportamento do bot em até
+5 minutos, sem deploy.
 
 ## Deploy no Railway
 
@@ -97,12 +123,17 @@ app/
   api/chat/route.ts             # chama Claude + Langfuse + persiste
   api/conversations/route.ts    # lista conversas
   api/conversations/[id]/route.ts  # mensagens de uma conversa
+  api/feedback/route.ts         # 👍/👎 → score no Langfuse + SQLite
   api/login/route.ts            # valida credenciais, seta cookie
   api/logout/route.ts           # limpa cookie
   register-sw.tsx                # registra o service worker
 lib/
   auth.ts                        # cria/verifica o token de sessão (JWT)
   db.ts                          # acesso ao SQLite (conversas/mensagens)
+  langfuse.ts                    # cliente do Langfuse + flush com timeout
+  prompt.ts                      # busca o prompt versionado (com fallback)
+scripts/
+  seed-prompt.mjs                # cria o prompt inicial no Langfuse
 middleware.ts                    # protege rotas exigindo sessão válida
 public/
   manifest.webmanifest           # manifest do PWA

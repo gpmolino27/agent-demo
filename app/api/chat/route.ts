@@ -1,13 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
-import { Langfuse } from "langfuse";
 import { addMessage, conversationExists, createConversation } from "@/lib/db";
+import { createLangfuse, flushWithTimeout } from "@/lib/langfuse";
+import { resolveSystemPrompt } from "@/lib/prompt";
 
 export const runtime = "nodejs";
 
 const MODEL = "claude-sonnet-5";
-const SYSTEM_PROMPT =
-  "Você é um assistente útil e conciso. Responda em português salvo pedido contrário.";
 
 type IncomingMessage = { role: "user" | "assistant"; content: string };
 
@@ -18,12 +17,7 @@ function makeTitle(text: string): string {
 }
 
 export async function POST(req: NextRequest) {
-  const {
-    ANTHROPIC_API_KEY,
-    LANGFUSE_PUBLIC_KEY,
-    LANGFUSE_SECRET_KEY,
-    LANGFUSE_BASEURL,
-  } = process.env;
+  const { ANTHROPIC_API_KEY } = process.env;
 
   if (!ANTHROPIC_API_KEY) {
     return NextResponse.json(
@@ -64,15 +58,10 @@ export async function POST(req: NextRequest) {
   }
 
   const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
+  const langfuse = createLangfuse();
 
-  const langfuseEnabled = Boolean(LANGFUSE_PUBLIC_KEY && LANGFUSE_SECRET_KEY);
-  const langfuse = langfuseEnabled
-    ? new Langfuse({
-        publicKey: LANGFUSE_PUBLIC_KEY,
-        secretKey: LANGFUSE_SECRET_KEY,
-        baseUrl: LANGFUSE_BASEURL,
-      })
-    : null;
+  // Prompt versionado no Langfuse (com fallback local se não existir/estiver fora).
+  const systemPrompt = await resolveSystemPrompt(langfuse);
 
   // sessionId agrupa todos os traces de uma mesma conversa no Langfuse.
   const trace = langfuse?.trace({
@@ -85,13 +74,15 @@ export async function POST(req: NextRequest) {
     name: "claude-completion",
     model: MODEL,
     input: messages,
+    // Vincula a generation à versão do prompt → métricas por versão na UI.
+    prompt: systemPrompt.client,
   });
 
   try {
     const response = await anthropic.messages.create({
       model: MODEL,
       max_tokens: 1024,
-      system: SYSTEM_PROMPT,
+      system: systemPrompt.text,
       messages: messages.map((m) => ({ role: m.role, content: m.content })),
     });
 
@@ -100,7 +91,12 @@ export async function POST(req: NextRequest) {
       .map((block) => block.text)
       .join("\n");
 
-    addMessage(conversationId, "assistant", reply);
+    const messageId = addMessage(
+      conversationId,
+      "assistant",
+      reply,
+      trace?.id ?? null,
+    );
 
     generation?.end({
       output: reply,
@@ -111,7 +107,12 @@ export async function POST(req: NextRequest) {
     });
     trace?.update({ output: reply });
 
-    return NextResponse.json({ reply, conversationId });
+    return NextResponse.json({
+      reply,
+      conversationId,
+      messageId,
+      traceId: trace?.id ?? null,
+    });
   } catch (err) {
     const message =
       err instanceof Error ? err.message : "Erro ao chamar o modelo.";
@@ -122,7 +123,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: message }, { status: 500 });
   } finally {
     if (langfuse) {
-      await langfuse.flushAsync();
+      await flushWithTimeout(langfuse);
     }
   }
 }
