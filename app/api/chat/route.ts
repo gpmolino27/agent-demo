@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { addMessage, conversationExists, createConversation } from "@/lib/db";
 import { createLangfuse, flushWithTimeout } from "@/lib/langfuse";
+import { searchKnowledge } from "@/lib/knowledge";
 import { resolveSystemPrompt } from "@/lib/prompt";
 
 export const runtime = "nodejs";
@@ -70,32 +71,92 @@ export async function POST(req: NextRequest) {
     input: messages,
   });
 
+  // Busca na base de conhecimento (knowledge/*.md) os trechos da pergunta atual.
+  const retrieval = trace?.span({
+    name: "knowledge-retrieval",
+    input: { query: lastUserMessage?.content ?? "" },
+  });
+  const hits = searchKnowledge(lastUserMessage?.content ?? "");
+  // O texto dos trechos vai pro span de propósito: é o que um avaliador
+  // LLM-as-a-judge precisa ver pra dizer se a resposta ficou fundamentada.
+  retrieval?.end({
+    output: hits.map((hit) => ({
+      heading: hit.heading,
+      score: Number(hit.score.toFixed(2)),
+      body: hit.body,
+    })),
+  });
+
+  // Cada trecho vira um document block com citations: o modelo responde
+  // ancorado neles e devolve qual trecho sustentou cada frase.
+  const documents: Anthropic.DocumentBlockParam[] = hits.map((hit) => ({
+    type: "document",
+    source: {
+      type: "text",
+      media_type: "text/plain",
+      data: `${hit.heading}\n\n${hit.body}`,
+    },
+    title: `${hit.doc} — ${hit.heading}`,
+    citations: { enabled: true },
+  }));
+
   const generation = trace?.generation({
     name: "claude-completion",
     model: MODEL,
     input: messages,
     // Vincula a generation à versão do prompt → métricas por versão na UI.
     prompt: systemPrompt.client,
+    metadata: { retrievedChunks: hits.length },
   });
 
   try {
-    const response = await anthropic.messages.create({
-      model: MODEL,
-      max_tokens: 1024,
-      system: systemPrompt.text,
-      messages: messages.map((m) => ({ role: m.role, content: m.content })),
+    const apiMessages: Anthropic.MessageParam[] = messages.map((m, i) => {
+      const isLastUser = m.role === "user" && i === messages.length - 1;
+      if (!isLastUser || documents.length === 0) {
+        return { role: m.role, content: m.content };
+      }
+      // Documentos antes do texto: é a ordem que a API espera.
+      return {
+        role: m.role,
+        content: [...documents, { type: "text" as const, text: m.content }],
+      };
     });
 
-    const reply = response.content
-      .filter((block): block is Anthropic.TextBlock => block.type === "text")
-      .map((block) => block.text)
-      .join("\n");
+    const response = await anthropic.messages.create({
+      model: MODEL,
+      max_tokens: 2048,
+      system: systemPrompt.text,
+      messages: apiMessages,
+    });
+
+    const textBlocks = response.content.filter(
+      (block): block is Anthropic.TextBlock => block.type === "text",
+    );
+    const reply = textBlocks.map((block) => block.text).join("");
+
+    // Seções efetivamente citadas — não as recuperadas. É a diferença entre
+    // "isto estava no contexto" e "isto sustentou a resposta".
+    const sources = [
+      ...new Set(
+        textBlocks
+          .flatMap((block) => block.citations ?? [])
+          // TextCitation também cobre resultados de web search, que não têm
+          // document_title — aqui só existem citações dos nossos documentos.
+          .filter(
+            (citation): citation is Anthropic.CitationCharLocation =>
+              citation.type === "char_location",
+          )
+          .map((citation) => citation.document_title)
+          .filter((title): title is string => Boolean(title)),
+      ),
+    ];
 
     const messageId = addMessage(
       conversationId,
       "assistant",
       reply,
       trace?.id ?? null,
+      sources,
     );
 
     generation?.end({
@@ -105,12 +166,13 @@ export async function POST(req: NextRequest) {
         output: response.usage.output_tokens,
       },
     });
-    trace?.update({ output: reply });
+    trace?.update({ output: reply, metadata: { sources } });
 
     return NextResponse.json({
       reply,
       conversationId,
       messageId,
+      sources,
       traceId: trace?.id ?? null,
     });
   } catch (err) {

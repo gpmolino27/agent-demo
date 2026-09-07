@@ -97,6 +97,22 @@ body {
   color: #ffb4c0;
 }
 
+/* Seções do manual que a resposta citou. */
+.sources {
+  margin: 2px 0 0;
+  padding: 0 0 0 14px;
+  list-style: none;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+  border-left: 2px solid var(--border);
+}
+
+.sources li::before {
+  content: "↳ ";
+  opacity: 0.6;
+}
+
 .feedback {
   display: flex;
   gap: 4px;

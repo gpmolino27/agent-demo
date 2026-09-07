@@ -1,9 +1,22 @@
 # Agent Demo
 
-App web simples em Next.js + TypeScript: um chat que chama o Claude
-(Anthropic) e envia cada troca de mensagens como um trace para o
-[Langfuse](https://github.com/gpmolino27/langfuse-selfhost) self-hosted.
-Tem login (usuário único) e histórico de conversas persistido em SQLite.
+Assistente interno de um serviço gratuito de orientação e encaminhamento para
+pessoas em situação de **superendividamento** (Lei 14.181/2021), na via
+extrajudicial, em São Paulo.
+
+App web em Next.js + TypeScript. O bot responde **a partir do manual de
+atendimento** (`knowledge/`), cita a seção em que se baseou, e envia cada troca
+como um trace para o [Langfuse](https://github.com/gpmolino27/langfuse-selfhost)
+self-hosted. Tem login (usuário único) e histórico persistido em SQLite.
+
+> **Quem conversa com o bot é a pessoa que atende** (voluntário/atendente), não
+> o assistido — é a voz em que o manual é escrito ("você confere", "registre o
+> resultado"). Para virar um bot voltado ao assistido, publique outra versão do
+> prompt pela UI do Langfuse; nada no código precisa mudar.
+
+O bot **não** dá parecer jurídico, não opina sobre legalidade de cláusula ou
+juros, e encaminha para advogado ou Defensoria quando a pergunta vira jurídica.
+Essas linhas vermelhas estão no system prompt e também no manual indexado.
 
 ## Como funciona
 
@@ -17,19 +30,40 @@ Tem login (usuário único) e histórico de conversas persistido em SQLite.
   persistir `conversations` e `messages` num arquivo SQLite. A sidebar em
   `app/page.tsx` lista as conversas (`GET /api/conversations`) e carrega o
   histórico de uma delas (`GET /api/conversations/[id]`) ao clicar.
+- **Base de conhecimento (RAG)** — os `.md` em `knowledge/` são a fonte de
+  verdade. `lib/knowledge.ts` quebra cada arquivo em seções (`##`), indexa em
+  **FTS5** num SQLite em memória e busca por BM25 com o heading pesando 3x o
+  corpo. Sem embeddings e sem serviço externo: a base tem alguns KB e o índice
+  é reconstruído no boot, então atualizar a base é **editar o `.md` e fazer
+  deploy** — sem migração, sem estado velho no volume.
+  Detalhes que importam: a query é normalizada (minúsculas, sem acento, sem
+  stopwords do português) pra casar com o tokenizer `unicode61
+  remove_diacritics 2`; e trechos que pontuam abaixo de 15% do melhor
+  resultado são descartados, senão qualquer palavra em comum arrasta seções
+  irrelevantes pro contexto — que é o que faz o modelo responder fora da fonte.
 - **Chat + Langfuse** — `app/api/chat/route.ts` (Node runtime):
   1. cria a conversa no SQLite (se for nova) e salva a mensagem do usuário;
   2. busca o system prompt no Langfuse (`lib/prompt.ts`);
   3. cria um `trace` no Langfuse com `sessionId = conversationId` — assim
      todas as trocas de uma mesma conversa aparecem agrupadas como uma
-     *Session* no Langfuse — e uma `generation` dentro dele, vinculada à
-     versão do prompt;
-  4. chama `anthropic.messages.create(...)`;
-  5. salva a resposta do assistente no SQLite (com o `traceId`) e fecha a
-     `generation` com output e uso de tokens;
-  6. dá `flush` no cliente do Langfuse antes de responder — com teto de
+     *Session* no Langfuse;
+  4. busca os trechos do manual e registra a recuperação como um **span**
+     `knowledge-retrieval` no trace, com o texto dos trechos — é o que um
+     avaliador LLM-as-a-judge precisa ver pra dizer se a resposta ficou
+     fundamentada;
+  5. manda os trechos como `document` blocks com `citations: {enabled: true}`
+     e abre uma `generation` vinculada à versão do prompt;
+  6. salva a resposta no SQLite (com o `traceId` e as seções citadas) e fecha
+     a `generation` com output e uso de tokens;
+  7. dá `flush` no cliente do Langfuse antes de responder — com teto de
      tempo (`flushWithTimeout`), porque o SDK leva ~9s pra desistir quando o
      Langfuse está fora, e observabilidade não pode segurar a resposta.
+
+  Só a mensagem **atual** recebe documentos; o histórico vai como texto puro,
+  pra não reenviar contexto a cada turno.
+- **Citações** — as fontes exibidas embaixo da resposta são as que o modelo
+  **citou**, não as que foram recuperadas. É a diferença entre "isto estava no
+  contexto" e "isto sustentou a resposta".
 - **Prompt versionado** — o system prompt mora no Langfuse
   (Prompts → `bot-system`, label `production`), buscado com cache de 5 min.
   Dá pra ajustar a personalidade do bot pela UI **sem novo deploy**. Se o
@@ -73,17 +107,31 @@ Abra http://localhost:3000 — você será redirecionado para `/login`.
 4. `LANGFUSE_BASEURL` é a URL do seu Langfuse (ex:
    `https://langfuse-web-production-e419.up.railway.app`).
 
+### Atualizando a base de conhecimento
+
+Edite os `.md` em `knowledge/`, commite e faça deploy. Não há passo de
+indexação: o índice é reconstruído sozinho quando o servidor sobe.
+
+Um `##` = um trecho recuperável, e o título do `##` é o que aparece como fonte
+na resposta — então **escreva headings que digam o assunto** ("Linhas
+vermelhas", "Etapa 2 — Dossiê"), não "Seção 3". Seção acima de 1800 caracteres
+é quebrada por parágrafo, repetindo o heading.
+
 ### O prompt no Langfuse
 
 Não precisa criar nada na mão: no boot do servidor (`instrumentation.ts`) o
-app checa se existe um `bot-system` com label `production` e cria a primeira
-versão se não existir.
+app garante que exista um `bot-system` com label `production`.
 
-Essa criação é deliberadamente conservadora — **só escreve diante de um 404
-explícito**. Se a consulta falhar por qualquer outro motivo (500, timeout,
-Langfuse fora do ar), ele não cria nada, pra um erro transitório nunca gerar
-uma versão nova que sobrescreveria, via label `production`, o prompt que você
-editou na UI.
+Ele escreve em exatamente dois casos, os dois seguros:
+
+- **404 explícito** — não existe nada ainda, cria a primeira versão;
+- o texto em produção é, **byte a byte**, um default que o próprio app
+  publicou — ninguém editou na UI, então dá pra atualizar.
+
+Qualquer outra resposta (500, timeout, Langfuse fora, ou um prompt com texto
+diferente dos nossos defaults) **não escreve nada**. Assim nem um erro
+transitório nem um deploy novo sobrescrevem, via label `production`, o prompt
+que você ajustou na UI.
 
 Depois disso, editar o prompt na UI (nova versão com o label `production`)
 muda o comportamento do bot em até 5 minutos, **sem deploy**.
@@ -128,16 +176,19 @@ app/
   page.tsx                      # UI do chat + sidebar de conversas
   login/page.tsx                # tela de login
   globals.css                   # estilos
-  api/chat/route.ts             # chama Claude + Langfuse + persiste
+  api/chat/route.ts             # busca no manual + Claude + Langfuse + persiste
   api/conversations/route.ts    # lista conversas
   api/conversations/[id]/route.ts  # mensagens de uma conversa
   api/feedback/route.ts         # 👍/👎 → score no Langfuse + SQLite
   api/login/route.ts            # valida credenciais, seta cookie
   api/logout/route.ts           # limpa cookie
   register-sw.tsx                # registra o service worker
+knowledge/
+  superendividamento-fluxo.md    # o manual — fonte de verdade do bot
 lib/
   auth.ts                        # cria/verifica o token de sessão (JWT)
   db.ts                          # acesso ao SQLite (conversas/mensagens)
+  knowledge.ts                   # índice FTS5 do manual + busca BM25
   langfuse.ts                    # cliente do Langfuse + flush com timeout
   prompt.ts                      # busca o prompt versionado (com fallback)
 scripts/

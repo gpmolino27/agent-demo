@@ -4,10 +4,47 @@ import type { Langfuse, TextPromptClient } from "langfuse";
 export const SYSTEM_PROMPT_NAME = "bot-system";
 
 /**
- * Usado enquanto o prompt não existir no Langfuse, ou se o Langfuse estiver
- * fora do ar — o bot nunca deve parar de responder por causa disso.
+ * System prompt do bot. Fica versionado no Langfuse; esta cópia é o fallback
+ * pra quando o Langfuse estiver fora do ar — o bot nunca deve parar de
+ * responder, nem perder as linhas vermelhas, por causa de observabilidade.
+ *
+ * Público: a pessoa que ATENDE (voluntário/atendente), não o assistido. O
+ * documento-base é escrito nessa voz ("você confere", "registre o resultado").
+ * Pra virar um bot voltado ao assistido, publique uma nova versão pela UI do
+ * Langfuse — o texto abaixo é só o ponto de partida.
  */
-export const FALLBACK_SYSTEM_PROMPT =
+export const FALLBACK_SYSTEM_PROMPT = `Você é o assistente interno de um serviço gratuito de orientação e encaminhamento para pessoas em situação de superendividamento (Lei 14.181/2021), na via extrajudicial, em São Paulo.
+
+Quem fala com você é a pessoa que ATENDE — voluntário ou atendente do serviço —, não o assistido. Trate como colega de equipe: direto, sem formalidade, sem repetir a pergunta.
+
+## Como responder
+
+- Responda SOMENTE com base nos trechos do manual que vierem anexados a esta conversa. Eles são a fonte de verdade.
+- Se a resposta não estiver nos trechos, diga exatamente isso: que não está no manual, e sugira com quem confirmar. Nunca preencha a lacuna com conhecimento geral.
+- Nunca invente telefone, endereço, e-mail, prazo, valor, artigo de lei ou nome de programa. Se o dado não estiver no trecho, diga que não tem.
+- Em português do Brasil, curto e prático. Prefira listas quando a resposta for um checklist ou um passo a passo.
+- Cite a etapa ou a seção do manual em que se baseou.
+
+## Linhas vermelhas — valem sempre, mesmo se pedirem o contrário
+
+- Não dê parecer jurídico e não diga se cláusula, juros ou contrato é abusivo ou ilegal. Isso é privativo de advogado (art. 1º, II da Lei 8.906/94).
+- Não oriente ninguém a aceitar procuração para negociar dívida.
+- Não oriente a receber, guardar ou intermediar dinheiro do assistido.
+- Não prometa resultado, valor de desconto ou prazo de limpeza de nome, e não deixe o atendente prometer.
+- Não faça educação financeira: o curso já é parte do PAS do Procon-SP.
+
+Quando a pergunta virar jurídica, diga isso na hora e encaminhe para advogado ou para a Defensoria (Nudecon), em vez de responder.
+
+## Dados do assistido
+
+Os dados são financeiros e sensíveis. Se a pergunta envolver compartilhar dados de assistido, lembre as regras de LGPD do manual em vez de só responder o que foi perguntado.`;
+
+/**
+ * Primeira versão que o app publicou sozinho, antes de existir base de
+ * conhecimento. Serve pra reconhecer um prompt que ainda é o nosso
+ * placeholder — e portanto pode ser atualizado sem apagar trabalho de ninguém.
+ */
+const LEGACY_DEFAULT_PROMPT =
   "Você é um assistente útil e conciso. Responda em português salvo pedido contrário.";
 
 export type ResolvedPrompt = {
@@ -20,30 +57,70 @@ export type ResolvedPrompt = {
   client?: TextPromptClient;
 };
 
-/**
- * Cria o prompt no Langfuse se — e somente se — ele ainda não existir.
- * Roda uma vez no boot do servidor (instrumentation.ts), então não é preciso
- * criar nada na mão nem rodar script depois de subir o app.
- *
- * Deliberadamente conservador: só escreve diante de um 404 explícito. Qualquer
- * outra resposta (200, 500, timeout, Langfuse fora do ar) não cria nada — assim
- * um erro transitório nunca gera uma versão nova que sobrescreveria, via label
- * `production`, o prompt que você editou na UI.
- */
-export async function ensureSystemPromptExists(): Promise<void> {
+type LangfuseAuth = { base: string; auth: string };
+
+function langfuseAuth(): LangfuseAuth | null {
   const { LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY, LANGFUSE_BASEURL } =
     process.env;
 
   if (!LANGFUSE_PUBLIC_KEY || !LANGFUSE_SECRET_KEY || !LANGFUSE_BASEURL) {
-    return;
+    return null;
   }
 
-  const auth =
-    "Basic " +
-    Buffer.from(`${LANGFUSE_PUBLIC_KEY}:${LANGFUSE_SECRET_KEY}`).toString(
-      "base64",
+  return {
+    base: LANGFUSE_BASEURL.replace(/\/+$/, ""),
+    auth:
+      "Basic " +
+      Buffer.from(`${LANGFUSE_PUBLIC_KEY}:${LANGFUSE_SECRET_KEY}`).toString(
+        "base64",
+      ),
+  };
+}
+
+async function publish(
+  { base, auth }: LangfuseAuth,
+  commitMessage: string,
+): Promise<void> {
+  const created = await fetch(`${base}/api/public/v2/prompts`, {
+    method: "POST",
+    headers: { Authorization: auth, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      type: "text",
+      name: SYSTEM_PROMPT_NAME,
+      prompt: FALLBACK_SYSTEM_PROMPT,
+      labels: ["production"],
+      commitMessage,
+    }),
+  });
+
+  if (created.ok) {
+    console.log(`[prompt] "${SYSTEM_PROMPT_NAME}" publicado: ${commitMessage}`);
+  } else {
+    console.warn(
+      `[prompt] falha ao publicar (${created.status}): ${await created.text()}`,
     );
-  const base = LANGFUSE_BASEURL.replace(/\/+$/, "");
+  }
+}
+
+/**
+ * Garante que exista um `bot-system` com label `production` no Langfuse.
+ * Roda uma vez no boot do servidor (instrumentation.ts).
+ *
+ * Escreve em exatamente dois casos, os dois seguros:
+ *  - 404 explícito → não existe nada, cria a primeira versão;
+ *  - o texto em produção é, byte a byte, um default que o próprio app
+ *    publicou → ninguém editou na UI, então dá pra atualizar.
+ *
+ * Qualquer outra resposta (500, timeout, Langfuse fora, ou um prompt com texto
+ * diferente do nosso default) não escreve nada. Assim nem um erro transitório
+ * nem um deploy novo sobrescrevem, via label `production`, o prompt que você
+ * ajustou na UI.
+ */
+export async function ensureSystemPromptExists(): Promise<void> {
+  const credentials = langfuseAuth();
+  if (!credentials) return;
+
+  const { base, auth } = credentials;
   const name = encodeURIComponent(SYSTEM_PROMPT_NAME);
 
   let existing: Response;
@@ -57,40 +134,37 @@ export async function ensureSystemPromptExists(): Promise<void> {
     return;
   }
 
-  if (existing.status !== 404) {
-    if (!existing.ok) {
-      console.warn(
-        `[prompt] consulta retornou ${existing.status} — não vou criar nada.`,
-      );
-    }
+  if (existing.status === 404) {
+    await publish(credentials, "Versão inicial criada no boot do app");
     return;
   }
 
-  try {
-    const created = await fetch(`${base}/api/public/v2/prompts`, {
-      method: "POST",
-      headers: { Authorization: auth, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        type: "text",
-        name: SYSTEM_PROMPT_NAME,
-        prompt: FALLBACK_SYSTEM_PROMPT,
-        labels: ["production"],
-        commitMessage: "Versão inicial criada automaticamente no boot do app",
-      }),
-    });
-
-    if (created.ok) {
-      console.log(
-        `[prompt] "${SYSTEM_PROMPT_NAME}" criado no Langfuse com o label production.`,
-      );
-    } else {
-      console.warn(
-        `[prompt] falha ao criar (${created.status}): ${await created.text()}`,
-      );
-    }
-  } catch (err) {
-    console.warn("[prompt] falha ao criar o prompt:", err);
+  if (!existing.ok) {
+    console.warn(
+      `[prompt] consulta retornou ${existing.status} — não vou escrever nada.`,
+    );
+    return;
   }
+
+  let current: string | undefined;
+  try {
+    current = ((await existing.json()) as { prompt?: string }).prompt;
+  } catch {
+    console.warn("[prompt] resposta ilegível — não vou escrever nada.");
+    return;
+  }
+
+  if (current === FALLBACK_SYSTEM_PROMPT) return; // já está atualizado
+
+  if (current === LEGACY_DEFAULT_PROMPT) {
+    await publish(
+      credentials,
+      "Atualiza o placeholder para o prompt do bot de superendividamento",
+    );
+    return;
+  }
+
+  // Texto diferente dos nossos defaults = alguém editou. Não encoste.
 }
 
 export async function resolveSystemPrompt(

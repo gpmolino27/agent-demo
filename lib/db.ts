@@ -42,6 +42,8 @@ function ensureColumn(table: string, column: string, definition: string) {
 ensureColumn("messages", "trace_id", "TEXT");
 // feedback: 1 = 👍, 0 = 👎, NULL = sem avaliação.
 ensureColumn("messages", "feedback", "INTEGER");
+// sources: JSON com as seções do manual que a resposta citou.
+ensureColumn("messages", "sources", "TEXT");
 
 export type Conversation = {
   id: string;
@@ -58,7 +60,24 @@ export type StoredMessage = {
   createdAt: number;
   traceId: string | null;
   feedback: number | null;
+  /** Seções do manual citadas na resposta (JSON no banco, array aqui). */
+  sources: string[];
 };
+
+type MessageRow = Omit<StoredMessage, "sources"> & { sources: string | null };
+
+function toMessage(row: MessageRow): StoredMessage {
+  let sources: string[] = [];
+  if (row.sources) {
+    try {
+      const parsed: unknown = JSON.parse(row.sources);
+      if (Array.isArray(parsed)) sources = parsed.filter((s) => typeof s === "string");
+    } catch {
+      // Linha antiga ou corrompida: melhor sem fontes do que quebrar a conversa.
+    }
+  }
+  return { ...row, sources };
+}
 
 export function listConversations(): Conversation[] {
   return db
@@ -87,15 +106,16 @@ export function createConversation(title: string): Conversation {
 }
 
 export function getMessages(conversationId: string): StoredMessage[] {
-  return db
+  const rows = db
     .prepare(
       `SELECT id, conversation_id as conversationId, role, content,
-              created_at as createdAt, trace_id as traceId, feedback
+              created_at as createdAt, trace_id as traceId, feedback, sources
        FROM messages
        WHERE conversation_id = ?
        ORDER BY id ASC`,
     )
-    .all(conversationId) as StoredMessage[];
+    .all(conversationId) as MessageRow[];
+  return rows.map(toMessage);
 }
 
 /** Retorna o id da mensagem inserida (usado pra anexar feedback depois). */
@@ -104,14 +124,22 @@ export function addMessage(
   role: "user" | "assistant",
   content: string,
   traceId?: string | null,
+  sources?: string[],
 ): number {
   const now = Date.now();
   const result = db
     .prepare(
-      `INSERT INTO messages (conversation_id, role, content, created_at, trace_id)
-       VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO messages (conversation_id, role, content, created_at, trace_id, sources)
+       VALUES (?, ?, ?, ?, ?, ?)`,
     )
-    .run(conversationId, role, content, now, traceId ?? null);
+    .run(
+      conversationId,
+      role,
+      content,
+      now,
+      traceId ?? null,
+      sources && sources.length > 0 ? JSON.stringify(sources) : null,
+    );
   db.prepare("UPDATE conversations SET updated_at = ? WHERE id = ?").run(
     now,
     conversationId,
@@ -120,14 +148,15 @@ export function addMessage(
 }
 
 export function getMessage(id: number): StoredMessage | undefined {
-  return db
+  const row = db
     .prepare(
       `SELECT id, conversation_id as conversationId, role, content,
-              created_at as createdAt, trace_id as traceId, feedback
+              created_at as createdAt, trace_id as traceId, feedback, sources
        FROM messages
        WHERE id = ?`,
     )
-    .get(id) as StoredMessage | undefined;
+    .get(id) as MessageRow | undefined;
+  return row ? toMessage(row) : undefined;
 }
 
 /** value: 1 = 👍, 0 = 👎, null = remove a avaliação. */

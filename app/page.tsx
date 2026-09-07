@@ -10,6 +10,8 @@ type ChatMessage = {
   messageId?: number;
   /** 1 = 👍, 0 = 👎, null/undefined = sem avaliação */
   feedback?: number | null;
+  /** Seções do manual que sustentaram a resposta */
+  sources?: string[];
 };
 
 type ConversationSummary = {
@@ -75,11 +77,13 @@ export default function Home() {
             role: string;
             content: string;
             feedback: number | null;
+            sources?: string[];
           }) => ({
             role: m.role as "user" | "assistant",
             content: m.content,
             messageId: m.id,
             feedback: m.feedback,
+            sources: m.sources ?? [],
           }),
         ),
       );
@@ -182,6 +186,7 @@ export default function Home() {
           content: data.reply as string,
           messageId: data.messageId as number | undefined,
           feedback: null,
+          sources: (data.sources as string[] | undefined) ?? [],
         },
       ]);
 
@@ -277,6 +282,14 @@ export default function Home() {
           {messages.map((m, i) => (
             <div key={i} className={`message-block ${m.role}`}>
               <div className={`message ${m.role}`}>{m.content}</div>
+
+              {m.role === "assistant" && (m.sources?.length ?? 0) > 0 && (
+                <ul className="sources">
+                  {m.sources!.map((source) => (
+                    <li key={source}>{source}</li>
+                  ))}
+                </ul>
+              )}
 
               {m.role === "assistant" && m.messageId !== undefined && (
                 <div className="feedback">

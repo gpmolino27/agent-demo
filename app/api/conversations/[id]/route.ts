@@ -21,6 +21,7 @@ export async function GET(
     role: m.role,
     content: m.content,
     feedback: m.feedback,
+    sources: m.sources,
   }));
 
   return NextResponse.json({ messages });
