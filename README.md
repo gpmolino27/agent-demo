@@ -3,32 +3,45 @@
 App web simples em Next.js + TypeScript: um chat que chama o Claude
 (Anthropic) e envia cada troca de mensagens como um trace para o
 [Langfuse](https://github.com/gpmolino27/langfuse-selfhost) self-hosted.
+Tem login (usuário único) e histórico de conversas persistido em SQLite.
 
 ## Como funciona
 
-- `app/page.tsx` — UI de chat (client component), sem dependências externas
-  de estilo.
-- `app/api/chat/route.ts` — rota de API (Node runtime) que:
-  1. cria um `trace` e uma `generation` no Langfuse antes de chamar o modelo;
-  2. chama `anthropic.messages.create(...)`;
-  3. fecha a `generation` com o output e uso de tokens;
-  4. dá `flush` no cliente do Langfuse antes de responder (importante em
+- **Login** — usuário único definido por variáveis de ambiente
+  (`AUTH_EMAIL`/`AUTH_PASSWORD`). `app/api/login/route.ts` valida as
+  credenciais (comparação em tempo constante) e emite um cookie httpOnly
+  assinado (JWT via `jose`, `lib/auth.ts`). `middleware.ts` protege todas as
+  rotas (páginas e API) exceto `/login` e `/api/login`, redirecionando para
+  o login quando o cookie é inválido/ausente.
+- **Histórico de conversas** — `lib/db.ts` usa `better-sqlite3` para
+  persistir `conversations` e `messages` num arquivo SQLite. A sidebar em
+  `app/page.tsx` lista as conversas (`GET /api/conversations`) e carrega o
+  histórico de uma delas (`GET /api/conversations/[id]`) ao clicar.
+- **Chat + Langfuse** — `app/api/chat/route.ts` (Node runtime):
+  1. cria a conversa no SQLite (se for nova) e salva a mensagem do usuário;
+  2. cria um `trace` no Langfuse com `sessionId = conversationId` — assim
+     todas as trocas de uma mesma conversa aparecem agrupadas como uma
+     *Session* no Langfuse — e uma `generation` dentro dele;
+  3. chama `anthropic.messages.create(...)`;
+  4. salva a resposta do assistente no SQLite e fecha a `generation` com
+     output e uso de tokens;
+  5. dá `flush` no cliente do Langfuse antes de responder (importante em
      ambientes serverless/short-lived, senão o evento pode não ser enviado).
 
-Se as variáveis `LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` não estiverem
-configuradas, o app funciona normalmente só sem enviar traces (fica só
-o chat com o Claude).
+Se `LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` não estiverem configuradas, o
+chat funciona normalmente só sem enviar traces.
 
 ## Rodando localmente
 
 ```bash
 npm install
 cp .env.example .env.local
-# edite .env.local com sua ANTHROPIC_API_KEY e as chaves do projeto no Langfuse
+# edite .env.local: ANTHROPIC_API_KEY, AUTH_EMAIL/AUTH_PASSWORD,
+# AUTH_SESSION_SECRET (openssl rand -hex 32) e as chaves do Langfuse
 npm run dev
 ```
 
-Abra http://localhost:3000.
+Abra http://localhost:3000 — você será redirecionado para `/login`.
 
 ### Obtendo as chaves do Langfuse
 
@@ -45,12 +58,18 @@ Abra http://localhost:3000.
    (`gpmolino27/agent-demo`) via GitHub — o Railway detecta Next.js
    automaticamente (Railpack) e roda `npm install && npm run build` /
    `npm start`.
-2. Configure as variáveis de ambiente do serviço:
+2. **Adicione um volume** ao serviço, montado em `/data` (Settings →
+   Volumes) — sem isso o histórico de conversas se perde a cada deploy,
+   já que o SQLite fica no filesystem do container.
+3. Configure as variáveis de ambiente do serviço:
    - `ANTHROPIC_API_KEY`
    - `LANGFUSE_PUBLIC_KEY`
    - `LANGFUSE_SECRET_KEY`
    - `LANGFUSE_BASEURL`
-3. Gere um domínio público para o serviço (Settings → Networking →
+   - `AUTH_EMAIL` / `AUTH_PASSWORD` — suas credenciais de login
+   - `AUTH_SESSION_SECRET` — `openssl rand -hex 32`
+   - `DATABASE_PATH=/data/app.db` — precisa apontar para dentro do volume
+4. Gere um domínio público para o serviço (Settings → Networking →
    Generate Domain).
 
 Como o Next.js respeita a variável `PORT` do Railway automaticamente
@@ -62,8 +81,17 @@ o `next start` já escuta nela.
 
 ```
 app/
-  layout.tsx        # layout raiz
-  page.tsx           # UI do chat
-  globals.css         # estilos
-  api/chat/route.ts   # endpoint que chama Claude + Langfuse
+  layout.tsx                    # layout raiz
+  page.tsx                      # UI do chat + sidebar de conversas
+  login/page.tsx                # tela de login
+  globals.css                   # estilos
+  api/chat/route.ts             # chama Claude + Langfuse + persiste
+  api/conversations/route.ts    # lista conversas
+  api/conversations/[id]/route.ts  # mensagens de uma conversa
+  api/login/route.ts            # valida credenciais, seta cookie
+  api/logout/route.ts           # limpa cookie
+lib/
+  auth.ts                        # cria/verifica o token de sessão (JWT)
+  db.ts                          # acesso ao SQLite (conversas/mensagens)
+middleware.ts                    # protege rotas exigindo sessão válida
 ```
