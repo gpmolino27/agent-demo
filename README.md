@@ -73,19 +73,27 @@ Abra http://localhost:3000 — você será redirecionado para `/login`.
 4. `LANGFUSE_BASEURL` é a URL do seu Langfuse (ex:
    `https://langfuse-web-production-e419.up.railway.app`).
 
-### Criando o prompt no Langfuse
+### O prompt no Langfuse
 
-Uma vez só, pra o prompt existir na UI (até lá o app usa o fallback do código):
+Não precisa criar nada na mão: no boot do servidor (`instrumentation.ts`) o
+app checa se existe um `bot-system` com label `production` e cria a primeira
+versão se não existir.
+
+Essa criação é deliberadamente conservadora — **só escreve diante de um 404
+explícito**. Se a consulta falhar por qualquer outro motivo (500, timeout,
+Langfuse fora do ar), ele não cria nada, pra um erro transitório nunca gerar
+uma versão nova que sobrescreveria, via label `production`, o prompt que você
+editou na UI.
+
+Depois disso, editar o prompt na UI (nova versão com o label `production`)
+muda o comportamento do bot em até 5 minutos, **sem deploy**.
+
+Se preferir criar/versionar manualmente:
 
 ```bash
 LANGFUSE_PUBLIC_KEY=... LANGFUSE_SECRET_KEY=... LANGFUSE_BASEURL=... \
   npm run seed:prompt
 ```
-
-Ou crie na mão em **Prompts → New prompt**, com nome `bot-system`, tipo
-`text` e label `production`. Depois disso, editar o prompt na UI (criando uma
-nova versão com o label `production`) muda o comportamento do bot em até
-5 minutos, sem deploy.
 
 ## Deploy no Railway
 
