@@ -78,6 +78,15 @@ Essas linhas vermelhas estão no system prompt e também no manual indexado.
 Se `LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` não estiverem configuradas, o
 chat funciona normalmente só sem enviar traces.
 
+> **Langfuse v4 + SDK v3**: o servidor v4 recusa `trace-create`,
+> `span-create` e `generation-create` em `/api/public/ingestion` quando
+> `LANGFUSE_MIGRATION_V4_WRITE_MODE` está em `events_only` (o default) —
+> só passam scores. O sintoma é o pior possível: a UI fica em "Waiting for
+> first trace" e o erro só aparece no log de quem envia. Ponte temporária:
+> `LANGFUSE_MIGRATION_V4_WRITE_MODE=dual` no `langfuse-web` **e** no
+> `langfuse-worker`. A saída definitiva é migrar este app para o SDK v4
+> (`@langfuse/tracing` + `@langfuse/otel`, via OTLP).
+
 - **PWA (instalável)** — `public/manifest.webmanifest` + ícones em
   `public/icons/` + `public/sw.js` (service worker mínimo, cacheia só
   assets estáticos — páginas e chamadas de API sempre vão pra rede, já que
