@@ -14,6 +14,8 @@ type ConversationSummary = {
   updatedAt: number;
 };
 
+const LAST_CONVERSATION_KEY = "agent-demo:lastConversationId";
+
 export default function Home() {
   const router = useRouter();
   const [conversations, setConversations] = useState<ConversationSummary[]>(
@@ -37,18 +39,41 @@ export default function Home() {
     loadConversations();
   }, [loadConversations]);
 
-  async function openConversation(id: string) {
-    setConversationId(id);
-    setSidebarOpen(false);
+  // Ao carregar a página, retoma a última conversa aberta (se ainda existir).
+  useEffect(() => {
+    const savedId = localStorage.getItem(LAST_CONVERSATION_KEY);
+    if (savedId) {
+      openConversation(savedId, { keepOnNotFound: false });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (conversationId) {
+      localStorage.setItem(LAST_CONVERSATION_KEY, conversationId);
+    } else {
+      localStorage.removeItem(LAST_CONVERSATION_KEY);
+    }
+  }, [conversationId]);
+
+  async function openConversation(
+    id: string,
+    opts: { keepOnNotFound?: boolean } = {},
+  ) {
     const res = await fetch(`/api/conversations/${id}`);
     if (res.ok) {
       const data = await res.json();
+      setConversationId(id);
       setMessages(
         data.messages.map((m: { role: string; content: string }) => ({
           role: m.role as "user" | "assistant",
           content: m.content,
         })),
       );
+      setSidebarOpen(false);
+    } else if (!opts.keepOnNotFound) {
+      // Conversa salva localmente não existe mais (ex: foi apagada) — limpa.
+      localStorage.removeItem(LAST_CONVERSATION_KEY);
     }
   }
 
@@ -56,6 +81,25 @@ export default function Home() {
     setConversationId(null);
     setMessages([]);
     setSidebarOpen(false);
+  }
+
+  async function handleDeleteConversation(id: string, e: React.MouseEvent) {
+    e.stopPropagation();
+    if (!confirm("Excluir esta conversa? Essa ação não pode ser desfeita.")) {
+      return;
+    }
+
+    const res = await fetch(`/api/conversations/${id}`, {
+      method: "DELETE",
+    });
+
+    if (res.ok) {
+      setConversations((prev) => prev.filter((c) => c.id !== id));
+      if (id === conversationId) {
+        setConversationId(null);
+        setMessages([]);
+      }
+    }
   }
 
   async function handleLogout() {
@@ -150,14 +194,26 @@ export default function Home() {
 
         <div className="conversation-list">
           {conversations.map((c) => (
-            <button
+            <div
               key={c.id}
-              className={`conversation-item ${c.id === conversationId ? "active" : ""}`}
-              onClick={() => openConversation(c.id)}
-              title={c.title}
+              className={`conversation-row ${c.id === conversationId ? "active" : ""}`}
             >
-              {c.title}
-            </button>
+              <button
+                className="conversation-item"
+                onClick={() => openConversation(c.id)}
+                title={c.title}
+              >
+                {c.title}
+              </button>
+              <button
+                className="conversation-delete"
+                onClick={(e) => handleDeleteConversation(c.id, e)}
+                aria-label={`Excluir conversa "${c.title}"`}
+                title="Excluir conversa"
+              >
+                🗑
+              </button>
+            </div>
           ))}
         </div>
 

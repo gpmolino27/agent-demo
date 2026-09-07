@@ -85,13 +85,15 @@ body {
 
 .composer {
   display: flex;
+  align-items: stretch;
   gap: 8px;
   border-top: 1px solid var(--border);
   padding-top: 16px;
 }
 
 .composer textarea {
-  flex: 1;
+  flex: 1 1 auto;
+  min-width: 0;
   resize: none;
   background: var(--panel);
   border: 1px solid var(--border);
@@ -103,11 +105,13 @@ body {
 }
 
 .composer button {
+  flex: 0 0 auto;
+  min-width: 72px;
   background: var(--accent);
   color: white;
   border: none;
   border-radius: 8px;
-  padding: 0 18px;
+  padding: 0 16px;
   font-size: 14px;
   cursor: pointer;
 }
@@ -160,7 +164,16 @@ body {
   overflow-y: auto;
 }
 
+.conversation-row {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  border-radius: 6px;
+}
+
 .conversation-item {
+  flex: 1;
+  min-width: 0;
   background: transparent;
   border: none;
   color: var(--muted);
@@ -174,15 +187,45 @@ body {
   white-space: nowrap;
 }
 
+.conversation-row:hover .conversation-item,
 .conversation-item:hover {
   background: var(--panel);
   color: var(--text);
 }
 
-.conversation-item.active {
+.conversation-row.active .conversation-item {
   background: var(--panel);
   color: var(--text);
   border: 1px solid var(--border);
+}
+
+.conversation-delete {
+  flex: 0 0 auto;
+  width: 30px;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.conversation-row:hover .conversation-delete,
+.conversation-row.active .conversation-delete {
+  opacity: 1;
+}
+
+.conversation-delete:hover {
+  background: #3a1620;
+  color: #ffb4c0;
+}
+
+@media (hover: none) {
+  /* touch: sem :hover confiável, mantém sempre visível */
+  .conversation-delete {
+    opacity: 1;
+  }
 }
 
 .logout {

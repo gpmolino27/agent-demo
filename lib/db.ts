@@ -95,3 +95,12 @@ export function addMessage(
     conversationId,
   );
 }
+
+const deleteConversationTx = db.transaction((id: string) => {
+  db.prepare("DELETE FROM messages WHERE conversation_id = ?").run(id);
+  db.prepare("DELETE FROM conversations WHERE id = ?").run(id);
+});
+
+export function deleteConversation(id: string) {
+  deleteConversationTx(id);
+}

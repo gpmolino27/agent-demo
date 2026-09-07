@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { conversationExists, getMessages } from "@/lib/db";
+import { conversationExists, deleteConversation, getMessages } from "@/lib/db";
 
 export const runtime = "nodejs";
 
@@ -22,4 +22,22 @@ export async function GET(
   }));
 
   return NextResponse.json({ messages });
+}
+
+export async function DELETE(
+  _req: NextRequest,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  const { id } = await params;
+
+  if (!conversationExists(id)) {
+    return NextResponse.json(
+      { error: "Conversa não encontrada." },
+      { status: 404 },
+    );
+  }
+
+  deleteConversation(id);
+
+  return NextResponse.json({ ok: true });
 }
