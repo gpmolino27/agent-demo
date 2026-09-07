@@ -1,22 +1,34 @@
 import { Langfuse } from "langfuse";
 
+// undefined = ainda não resolvido; null = chaves ausentes.
+let client: Langfuse | null | undefined;
+
 /**
- * Devolve null quando as chaves não estão configuradas — nesse caso o app
- * funciona normalmente, só sem enviar nada pro Langfuse.
+ * Cliente único do processo. Devolve null quando as chaves não estão
+ * configuradas — nesse caso o app funciona normalmente, só sem enviar nada.
+ *
+ * Precisa ser singleton: um cliente por request cria uma fila e um timer de
+ * flush novos a cada chamada, então o envio que não coube no teto de tempo
+ * abaixo ficava pendurado num cliente que ninguém mais toca. Com um só, a fila
+ * é compartilhada e o flush da próxima request carrega o que sobrou da
+ * anterior.
  */
-export function createLangfuse(): Langfuse | null {
+export function getLangfuse(): Langfuse | null {
+  if (client !== undefined) return client;
+
   const { LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY, LANGFUSE_BASEURL } =
     process.env;
 
-  if (!LANGFUSE_PUBLIC_KEY || !LANGFUSE_SECRET_KEY) {
-    return null;
-  }
+  client =
+    LANGFUSE_PUBLIC_KEY && LANGFUSE_SECRET_KEY
+      ? new Langfuse({
+          publicKey: LANGFUSE_PUBLIC_KEY,
+          secretKey: LANGFUSE_SECRET_KEY,
+          baseUrl: LANGFUSE_BASEURL,
+        })
+      : null;
 
-  return new Langfuse({
-    publicKey: LANGFUSE_PUBLIC_KEY,
-    secretKey: LANGFUSE_SECRET_KEY,
-    baseUrl: LANGFUSE_BASEURL,
-  });
+  return client;
 }
 
 /**

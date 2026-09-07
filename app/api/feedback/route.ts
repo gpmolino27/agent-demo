@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getMessage, setMessageFeedback } from "@/lib/db";
-import { createLangfuse, flushWithTimeout } from "@/lib/langfuse";
+import { getLangfuse, flushWithTimeout } from "@/lib/langfuse";
 
 export const runtime = "nodejs";
 
@@ -35,7 +35,7 @@ export async function POST(req: NextRequest) {
   // O score só vai pro Langfuse quando há trace — mensagens antigas (de antes
   // desta feature) não têm trace_id, mas o feedback local continua valendo.
   if (value !== null && message.traceId) {
-    const langfuse = createLangfuse();
+    const langfuse = getLangfuse();
     if (langfuse) {
       langfuse.score({
         traceId: message.traceId,

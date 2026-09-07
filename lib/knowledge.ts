@@ -1,14 +1,23 @@
-import Database from "better-sqlite3";
 import fs from "node:fs";
 import path from "node:path";
 
 /**
  * Base de conhecimento: os .md em knowledge/ são a única fonte de verdade.
  *
- * O índice é FTS5 num banco em memória, reconstruído no boot. Os arquivos vêm
- * junto com o repositório, então o índice é um derivado puro deles — atualizar
- * a base é editar o .md e fazer deploy, sem migração e sem estado velho no
- * volume. A base tem alguns KB; indexar leva milissegundos.
+ * O índice é BM25 em memória, em TypeScript puro, construído na primeira
+ * busca. Os arquivos vêm junto com o repositório, então o índice é um derivado
+ * puro deles — atualizar a base é editar o .md e fazer deploy, sem migração e
+ * sem estado velho no volume. A base tem alguns KB; indexar leva milissegundos.
+ *
+ * A primeira versão disto usava FTS5 num segundo banco better-sqlite3 em
+ * memória, e o processo passou a abortar em produção no destrutor nativo do
+ * better-sqlite3 ("Assertion failed: (env) != nullptr" em
+ * RemoveEnvironmentCleanupHook, vindo de Statement::~Statement) — derrubando o
+ * servidor e, junto, os traces que ainda estavam sendo enviados. Não reproduzi
+ * a corrida localmente, então em vez de apostar num mecanismo não confirmado,
+ * o índice deixou de usar código nativo: são 16 trechos de um manual de 7KB,
+ * onde um motor de full-text é desproporcional. Mesma fórmula, mesma
+ * tokenização, zero handles nativos pro GC finalizar.
  */
 
 const KNOWLEDGE_DIR = path.join(process.cwd(), "knowledge");
@@ -29,7 +38,6 @@ const MAX_CHUNK_CHARS = 1800;
 const MIN_SCORE_RATIO = 0.15;
 
 export type Chunk = {
-  /** rowid no índice FTS5. */
   id: number;
   /** Título do documento (o `#` do arquivo). */
   doc: string;
@@ -42,7 +50,7 @@ export type Chunk = {
 };
 
 export type Hit = Chunk & {
-  /** Score do BM25 já invertido: maior = mais relevante. */
+  /** Score do BM25: maior = mais relevante. */
   score: number;
 };
 
@@ -64,7 +72,7 @@ const STOPWORDS = new Set([
 ]);
 
 
-/** minúsculas + sem acento, pra casar com o tokenizer do FTS5. */
+/** minúsculas + sem acento, pra "inscrição" casar com "inscricao". */
 function normalize(text: string): string {
   return text
     .toLowerCase()
@@ -142,20 +150,37 @@ function chunkMarkdown(markdown: string, file: string): Omit<Chunk, "id">[] {
   return chunks;
 }
 
-type Index = { db: Database.Database; chunks: Chunk[] };
+/** Um campo indexado: frequências por termo e o tamanho do documento. */
+type Field = { freq: Map<string, number>; length: number };
+
+type Doc = { chunk: Chunk; heading: Field; body: Field };
+
+type Index = {
+  docs: Doc[];
+  /** Em quantos documentos cada termo aparece, por campo. */
+  docFreq: { heading: Map<string, number>; body: Map<string, number> };
+  avgLength: { heading: number; body: number };
+};
+
+/** Parâmetros clássicos do BM25. */
+const K1 = 1.2;
+const B = 0.75;
+
+/** O heading nomeia o assunto da seção, então bater nele vale mais. */
+const FIELD_WEIGHT = { heading: 3, body: 1 } as const;
 
 let index: Index | null = null;
 
-function build(): Index {
-  const db = new Database(":memory:");
-  db.exec(`
-    CREATE VIRTUAL TABLE chunks USING fts5(
-      heading,
-      body,
-      tokenize = 'unicode61 remove_diacritics 2'
-    );
-  `);
+function toField(text: string): Field {
+  const freq = new Map<string, number>();
+  const tokens = normalize(text)
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+  for (const token of tokens) freq.set(token, (freq.get(token) ?? 0) + 1);
+  return { freq, length: tokens.length };
+}
 
+function build(): Index {
   let files: string[] = [];
   try {
     files = fs
@@ -164,28 +189,48 @@ function build(): Index {
       .sort();
   } catch {
     // Sem a pasta knowledge/ o app roda sem base — o bot diz que não sabe.
-    return { db, chunks: [] };
+    files = [];
   }
 
-  const chunks: Chunk[] = [];
-  const insert = db.prepare(
-    "INSERT INTO chunks (rowid, heading, body) VALUES (?, ?, ?)",
-  );
-
+  const docs: Doc[] = [];
   for (const file of files) {
     const markdown = fs.readFileSync(path.join(KNOWLEDGE_DIR, file), "utf8");
     for (const chunk of chunkMarkdown(markdown, file)) {
-      const id = chunks.length + 1;
-      chunks.push({ id, ...chunk });
-      insert.run(id, chunk.heading, chunk.body);
+      docs.push({
+        chunk: { id: docs.length + 1, ...chunk },
+        heading: toField(chunk.heading),
+        body: toField(chunk.body),
+      });
+    }
+  }
+
+  const docFreq = {
+    heading: new Map<string, number>(),
+    body: new Map<string, number>(),
+  };
+  const total = { heading: 0, body: 0 };
+
+  for (const doc of docs) {
+    for (const field of ["heading", "body"] as const) {
+      total[field] += doc[field].length;
+      for (const term of doc[field].freq.keys()) {
+        docFreq[field].set(term, (docFreq[field].get(term) ?? 0) + 1);
+      }
     }
   }
 
   console.log(
-    `[knowledge] ${chunks.length} trecho(s) indexado(s) de ${files.length} arquivo(s) em knowledge/.`,
+    `[knowledge] ${docs.length} trecho(s) indexado(s) de ${files.length} arquivo(s) em knowledge/.`,
   );
 
-  return { db, chunks };
+  return {
+    docs,
+    docFreq,
+    avgLength: {
+      heading: docs.length ? total.heading / docs.length : 0,
+      body: docs.length ? total.body / docs.length : 0,
+    },
+  };
 }
 
 function getIndex(): Index {
@@ -194,41 +239,43 @@ function getIndex(): Index {
 }
 
 /**
- * Busca os trechos mais relevantes pra pergunta.
- * O heading pesa 3x o corpo: as seções aqui são nomeadas pelo assunto
- * ("Linhas vermelhas", "Etapa 2 — Dossiê"), então bater no título é forte.
+ * Busca os trechos mais relevantes pra pergunta, por BM25 somado sobre os dois
+ * campos (heading e corpo), cada um com sua própria normalização de tamanho.
  */
 export function searchKnowledge(query: string, topK = DEFAULT_TOP_K): Hit[] {
-  const tokens = tokenize(query);
-  if (tokens.length === 0) return [];
+  const terms = tokenize(query);
+  if (terms.length === 0) return [];
 
-  const { db, chunks } = getIndex();
-  if (chunks.length === 0) return [];
+  const { docs, docFreq, avgLength } = getIndex();
+  if (docs.length === 0) return [];
 
-  const match = tokens.map((t) => `"${t.replace(/"/g, "")}"`).join(" OR ");
+  const scored: Hit[] = [];
 
-  let rows: { rowid: number; score: number }[];
-  try {
-    rows = db
-      .prepare(
-        `SELECT rowid, bm25(chunks, 3.0, 1.0) AS score
-         FROM chunks
-         WHERE chunks MATCH ?
-         ORDER BY score
-         LIMIT ?`,
-      )
-      .all(match, topK) as { rowid: number; score: number }[];
-  } catch {
-    // Query malformada pro FTS5 não pode derrubar o chat.
-    return [];
+  for (const doc of docs) {
+    let score = 0;
+
+    for (const field of ["heading", "body"] as const) {
+      const avg = avgLength[field];
+      if (avg === 0) continue;
+
+      for (const term of terms) {
+        const tf = doc[field].freq.get(term);
+        if (!tf) continue;
+
+        const n = docFreq[field].get(term) ?? 0;
+        const idf = Math.log(1 + (docs.length - n + 0.5) / (n + 0.5));
+        const norm = 1 - B + (B * doc[field].length) / avg;
+
+        score += FIELD_WEIGHT[field] * idf * ((tf * (K1 + 1)) / (tf + K1 * norm));
+      }
+    }
+
+    if (score > 0) scored.push({ ...doc.chunk, score });
   }
 
-  // bm25 é negativo (mais negativo = melhor); inverte pra ficar legível.
-  const hits = rows.map((row) => ({
-    ...chunks[row.rowid - 1],
-    score: -row.score,
-  }));
+  scored.sort((a, b) => b.score - a.score);
 
+  const hits = scored.slice(0, topK);
   const best = hits[0]?.score ?? 0;
   return hits.filter((hit) => hit.score >= best * MIN_SCORE_RATIO);
 }

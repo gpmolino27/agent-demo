@@ -31,16 +31,17 @@ Essas linhas vermelhas estão no system prompt e também no manual indexado.
   `app/page.tsx` lista as conversas (`GET /api/conversations`) e carrega o
   histórico de uma delas (`GET /api/conversations/[id]`) ao clicar.
 - **Base de conhecimento (RAG)** — os `.md` em `knowledge/` são a fonte de
-  verdade. `lib/knowledge.ts` quebra cada arquivo em seções (`##`), indexa em
-  **FTS5** num SQLite em memória e busca por BM25 com o heading pesando 3x o
-  corpo. Sem embeddings e sem serviço externo: a base tem alguns KB e o índice
-  é reconstruído no boot, então atualizar a base é **editar o `.md` e fazer
-  deploy** — sem migração, sem estado velho no volume.
+  verdade. `lib/knowledge.ts` quebra cada arquivo em seções (`##`) e busca por
+  **BM25 em TypeScript puro**, com o heading pesando 3x o corpo. Sem
+  embeddings, sem serviço externo e sem código nativo: a base tem alguns KB e o
+  índice é derivado dos arquivos, então atualizar a base é **editar o `.md` e
+  fazer deploy** — sem migração, sem estado velho no volume.
   Detalhes que importam: a query é normalizada (minúsculas, sem acento, sem
-  stopwords do português) pra casar com o tokenizer `unicode61
-  remove_diacritics 2`; e trechos que pontuam abaixo de 15% do melhor
+  stopwords do português); e trechos que pontuam abaixo de 15% do melhor
   resultado são descartados, senão qualquer palavra em comum arrasta seções
   irrelevantes pro contexto — que é o que faz o modelo responder fora da fonte.
+  A primeira versão usava FTS5 num segundo banco `better-sqlite3` em memória e
+  derrubava o processo em produção (ver o comentário no topo do arquivo).
 - **Chat + Langfuse** — `app/api/chat/route.ts` (Node runtime):
   1. cria a conversa no SQLite (se for nova) e salva a mensagem do usuário;
   2. busca o system prompt no Langfuse (`lib/prompt.ts`);
@@ -188,7 +189,7 @@ knowledge/
 lib/
   auth.ts                        # cria/verifica o token de sessão (JWT)
   db.ts                          # acesso ao SQLite (conversas/mensagens)
-  knowledge.ts                   # índice FTS5 do manual + busca BM25
+  knowledge.ts                   # índice do manual + busca BM25
   langfuse.ts                    # cliente do Langfuse + flush com timeout
   prompt.ts                      # busca o prompt versionado (com fallback)
 scripts/

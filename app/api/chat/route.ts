@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { addMessage, conversationExists, createConversation } from "@/lib/db";
-import { createLangfuse, flushWithTimeout } from "@/lib/langfuse";
+import { getLangfuse, flushWithTimeout } from "@/lib/langfuse";
 import { searchKnowledge } from "@/lib/knowledge";
 import { resolveSystemPrompt } from "@/lib/prompt";
 
@@ -59,7 +59,7 @@ export async function POST(req: NextRequest) {
   }
 
   const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
-  const langfuse = createLangfuse();
+  const langfuse = getLangfuse();
 
   // Prompt versionado no Langfuse (com fallback local se não existir/estiver fora).
   const systemPrompt = await resolveSystemPrompt(langfuse);
