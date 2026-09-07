@@ -11,9 +11,12 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.68.0",
+    "@langfuse/client": "^5.11.0",
+    "@langfuse/otel": "^5.11.0",
+    "@langfuse/tracing": "^5.11.0",
+    "@opentelemetry/sdk-trace-node": "^2.11.0",
     "better-sqlite3": "^11.10.0",
     "jose": "^5.9.6",
-    "langfuse": "^3.38.4",
     "next": "^15.5.4",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"

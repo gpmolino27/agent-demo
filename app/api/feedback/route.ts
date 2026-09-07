@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getMessage, setMessageFeedback } from "@/lib/db";
-import { getLangfuse, flushWithTimeout } from "@/lib/langfuse";
+import { flushWithTimeout, getLangfuse } from "@/lib/langfuse";
 
 export const runtime = "nodejs";
 
@@ -37,13 +37,13 @@ export async function POST(req: NextRequest) {
   if (value !== null && message.traceId) {
     const langfuse = getLangfuse();
     if (langfuse) {
-      langfuse.score({
+      langfuse.score.create({
         traceId: message.traceId,
         name: SCORE_NAME,
         value,
         dataType: "NUMERIC",
       });
-      await flushWithTimeout(langfuse);
+      await flushWithTimeout();
     }
   }
 

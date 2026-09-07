@@ -45,15 +45,17 @@ Essas linhas vermelhas estão no system prompt e também no manual indexado.
 - **Chat + Langfuse** — `app/api/chat/route.ts` (Node runtime):
   1. cria a conversa no SQLite (se for nova) e salva a mensagem do usuário;
   2. busca o system prompt no Langfuse (`lib/prompt.ts`);
-  3. cria um `trace` no Langfuse com `sessionId = conversationId` — assim
-     todas as trocas de uma mesma conversa aparecem agrupadas como uma
-     *Session* no Langfuse;
-  4. busca os trechos do manual e registra a recuperação como um **span**
-     `knowledge-retrieval` no trace, com o texto dos trechos — é o que um
-     avaliador LLM-as-a-judge precisa ver pra dizer se a resposta ficou
-     fundamentada;
+  3. abre a observação raiz `chat-message` dentro de
+     `propagateAttributes({ sessionId: conversationId })` — assim todas as
+     trocas de uma mesma conversa aparecem agrupadas como uma *Session* no
+     Langfuse, e todo span filho herda o `session.id`;
+  4. busca os trechos do manual e registra a recuperação como uma observação
+     `knowledge-retrieval` do tipo **retriever**, com o texto dos trechos — é
+     o que um avaliador LLM-as-a-judge precisa ver pra dizer se a resposta
+     ficou fundamentada;
   5. manda os trechos como `document` blocks com `citations: {enabled: true}`
-     e abre uma `generation` vinculada à versão do prompt;
+     e abre uma observação `claude-completion` do tipo **generation**,
+     vinculada à versão do prompt (`{name, version, isFallback}`);
   6. salva a resposta no SQLite (com o `traceId` e as seções citadas) e fecha
      a `generation` com output e uso de tokens;
   7. dá `flush` no cliente do Langfuse antes de responder — com teto de
@@ -78,14 +80,13 @@ Essas linhas vermelhas estão no system prompt e também no manual indexado.
 Se `LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` não estiverem configuradas, o
 chat funciona normalmente só sem enviar traces.
 
-> **Langfuse v4 + SDK v3**: o servidor v4 recusa `trace-create`,
-> `span-create` e `generation-create` em `/api/public/ingestion` quando
-> `LANGFUSE_MIGRATION_V4_WRITE_MODE` está em `events_only` (o default) —
-> só passam scores. O sintoma é o pior possível: a UI fica em "Waiting for
-> first trace" e o erro só aparece no log de quem envia. Ponte temporária:
-> `LANGFUSE_MIGRATION_V4_WRITE_MODE=dual` no `langfuse-web` **e** no
-> `langfuse-worker`. A saída definitiva é migrar este app para o SDK v4
-> (`@langfuse/tracing` + `@langfuse/otel`, via OTLP).
+> **SDK v4 (OpenTelemetry)**: este app usa `@langfuse/tracing` +
+> `@langfuse/otel` + `@langfuse/client`. O SDK v3 (`langfuse`) não serve
+> num Langfuse v4: o servidor recusa `trace-create`, `span-create` e
+> `generation-create` em `/api/public/ingestion` quando
+> `LANGFUSE_MIGRATION_V4_WRITE_MODE` está no default `events_only` — só
+> passam scores. O sintoma é o pior possível: a UI fica em "Waiting for
+> first trace" e o erro só aparece no log de quem envia.
 
 - **PWA (instalável)** — `public/manifest.webmanifest` + ícones em
   `public/icons/` + `public/sw.js` (service worker mínimo, cacheia só
@@ -197,9 +198,9 @@ knowledge/
   superendividamento-fluxo.md    # o manual — fonte de verdade do bot
 lib/
   auth.ts                        # cria/verifica o token de sessão (JWT)
+  langfuse.ts                    # tracer OTel + cliente (scores/prompts)
   db.ts                          # acesso ao SQLite (conversas/mensagens)
   knowledge.ts                   # índice do manual + busca BM25
-  langfuse.ts                    # cliente do Langfuse + flush com timeout
   prompt.ts                      # busca o prompt versionado (com fallback)
 scripts/
   seed-prompt.mjs                # cria o prompt inicial no Langfuse

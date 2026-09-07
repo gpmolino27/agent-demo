@@ -1,4 +1,4 @@
-import type { Langfuse, TextPromptClient } from "langfuse";
+import type { LangfuseClient, TextPromptClient } from "@langfuse/client";
 
 /** Nome do prompt no Langfuse (Prompts → bot-system). */
 export const SYSTEM_PROMPT_NAME = "bot-system";
@@ -87,22 +87,25 @@ export type ResolvedPrompt = {
    * Só vem preenchido quando o prompt veio mesmo do Langfuse. Serve pra
    * vincular a generation à versão do prompt (métricas por versão na UI);
    * com o fallback não há versão real pra vincular.
+   *
+   * No SDK v4 a generation recebe {name, version, isFallback}, não o cliente.
    */
-  client?: TextPromptClient;
+  link?: { name: string; version: number; isFallback: boolean };
 };
 
 type LangfuseAuth = { base: string; auth: string };
 
 function langfuseAuth(): LangfuseAuth | null {
-  const { LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY, LANGFUSE_BASEURL } =
-    process.env;
+  const { LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY } = process.env;
+  // v4 usa LANGFUSE_BASE_URL; v3 usava LANGFUSE_BASEURL. Aceita os dois.
+  const base = process.env.LANGFUSE_BASE_URL || process.env.LANGFUSE_BASEURL;
 
-  if (!LANGFUSE_PUBLIC_KEY || !LANGFUSE_SECRET_KEY || !LANGFUSE_BASEURL) {
+  if (!LANGFUSE_PUBLIC_KEY || !LANGFUSE_SECRET_KEY || !base) {
     return null;
   }
 
   return {
-    base: LANGFUSE_BASEURL.replace(/\/+$/, ""),
+    base: base.replace(/\/+$/, ""),
     auth:
       "Basic " +
       Buffer.from(`${LANGFUSE_PUBLIC_KEY}:${LANGFUSE_SECRET_KEY}`).toString(
@@ -199,24 +202,32 @@ export async function ensureSystemPromptExists(): Promise<void> {
 }
 
 export async function resolveSystemPrompt(
-  langfuse: Langfuse | null,
+  langfuse: LangfuseClient | null,
 ): Promise<ResolvedPrompt> {
   if (!langfuse) {
     return { text: FALLBACK_SYSTEM_PROMPT };
   }
 
+  let prompt: TextPromptClient;
   try {
-    const client = await langfuse.getPrompt(SYSTEM_PROMPT_NAME, undefined, {
+    prompt = await langfuse.prompt.get(SYSTEM_PROMPT_NAME, {
       label: "production",
       cacheTtlSeconds: 300,
       fallback: FALLBACK_SYSTEM_PROMPT,
       type: "text",
     });
-
-    return client.isFallback
-      ? { text: client.prompt }
-      : { text: client.prompt, client };
   } catch {
     return { text: FALLBACK_SYSTEM_PROMPT };
   }
+
+  if (prompt.isFallback) return { text: prompt.prompt };
+
+  return {
+    text: prompt.prompt,
+    link: {
+      name: prompt.name,
+      version: prompt.version,
+      isFallback: false,
+    },
+  };
 }
