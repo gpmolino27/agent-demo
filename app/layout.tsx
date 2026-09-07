@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { RegisterServiceWorker } from "./register-sw";
+import { ViewportHeight } from "./viewport-height";
 
 export const metadata: Metadata = {
   title: "Agent Demo",
@@ -38,6 +39,7 @@ export default function RootLayout({
       <body>
         {children}
         <RegisterServiceWorker />
+        <ViewportHeight />
       </body>
     </html>
   );
