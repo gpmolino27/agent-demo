@@ -1,0 +1,118 @@
+:root {
+  color-scheme: light dark;
+  --bg: #0b0d12;
+  --panel: #14171f;
+  --border: #262b36;
+  --text: #e8eaed;
+  --muted: #8b93a3;
+  --accent: #6c5ce7;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial,
+    sans-serif;
+}
+
+.page {
+  max-width: 720px;
+  margin: 0 auto;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  padding: 24px 16px;
+}
+
+.header h1 {
+  font-size: 20px;
+  margin: 0 0 4px;
+}
+
+.header p {
+  margin: 0 0 20px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.messages {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+  padding-bottom: 16px;
+}
+
+.message {
+  padding: 10px 14px;
+  border-radius: 10px;
+  max-width: 80%;
+  white-space: pre-wrap;
+  line-height: 1.45;
+  font-size: 14px;
+}
+
+.message.user {
+  align-self: flex-end;
+  background: var(--accent);
+  color: white;
+}
+
+.message.assistant {
+  align-self: flex-start;
+  background: var(--panel);
+  border: 1px solid var(--border);
+}
+
+.message.error {
+  align-self: flex-start;
+  background: #3a1620;
+  border: 1px solid #6b2233;
+  color: #ffb4c0;
+}
+
+.composer {
+  display: flex;
+  gap: 8px;
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+}
+
+.composer textarea {
+  flex: 1;
+  resize: none;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  padding: 10px 12px;
+  font-size: 14px;
+  font-family: inherit;
+}
+
+.composer button {
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  padding: 0 18px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.composer button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
