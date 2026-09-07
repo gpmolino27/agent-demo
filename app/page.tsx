@@ -23,6 +23,7 @@ export default function Home() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const loadConversations = useCallback(async () => {
     const res = await fetch("/api/conversations");
@@ -38,6 +39,7 @@ export default function Home() {
 
   async function openConversation(id: string) {
     setConversationId(id);
+    setSidebarOpen(false);
     const res = await fetch(`/api/conversations/${id}`);
     if (res.ok) {
       const data = await res.json();
@@ -53,6 +55,7 @@ export default function Home() {
   function startNewConversation() {
     setConversationId(null);
     setMessages([]);
+    setSidebarOpen(false);
   }
 
   async function handleLogout() {
@@ -113,10 +116,37 @@ export default function Home() {
 
   return (
     <div className="layout">
-      <aside className="sidebar">
-        <button className="new-chat" onClick={startNewConversation}>
-          + Nova conversa
+      <div className="mobile-topbar">
+        <button
+          className="menu-toggle"
+          onClick={() => setSidebarOpen(true)}
+          aria-label="Abrir menu de conversas"
+        >
+          ☰
         </button>
+        <span className="mobile-title">Agent Demo</span>
+      </div>
+
+      {sidebarOpen && (
+        <div
+          className="sidebar-overlay"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
+      <aside className={`sidebar ${sidebarOpen ? "open" : ""}`}>
+        <div className="sidebar-header">
+          <button className="new-chat" onClick={startNewConversation}>
+            + Nova conversa
+          </button>
+          <button
+            className="sidebar-close"
+            onClick={() => setSidebarOpen(false)}
+            aria-label="Fechar menu"
+          >
+            ✕
+          </button>
+        </div>
 
         <div className="conversation-list">
           {conversations.map((c) => (
